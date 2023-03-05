@@ -1,0 +1,33 @@
+{
+  "name": "three-sac-frontend",
+  "version": "1.0.0",
+  "description": "three.js-frontend for three-sac",
+  "source": "./dev/src/index.html",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start-watch": "nodemon ./production/server/index.js",
+    "build-watch": "parcel watch ./production/index.html --dist-dir ./production/dist",
+    "dev": "concurrently --kill-others \"npm run start-watch\" \"npm run build-watch\"",
+    "build": "rm -rf ./production/dist/* && parcel build ./production/index.html --public-url ./ --dist-dir ./production/dist"
+  },
+  "keywords": [
+    "frontend"
+  ],
+  "author": "sac",
+  "git": "https://github.com/luminome/three-sac-frontend",
+  "license": "ISC",
+  "dependencies": {
+    "stats.js": "^0.17.0",
+    "three": "^0.150.1",
+    "three-sac": "github:luminome/three-sac"
+  },
+  "devDependencies": {
+    "concurrently": "^7.6.0",
+    "express": "^4.18.2",
+    "nodemon": "^2.0.21",
+    "parcel": "^2.8.3"
+  },
+  "nodemonConfig": {
+    "ext": "js, html, css"
+  }
+}
