@@ -14,7 +14,7 @@ const config = {
             grid_marks:{
                 on: true,
                 target: 'model',
-                distance: 40.0,
+                distance: 20.0,
                 width: 20,
                 pitch: 2.0,
                 shape_length: 5.0,
@@ -27,7 +27,7 @@ const config = {
                 target: 'scene',
                 color: 0x333333,
                 opacity: 0.9,
-                distance: 40.0,
+                distance: 20.0,
             },
             helper_grid:{
                 on: true,
@@ -40,7 +40,7 @@ const config = {
                 width: 20
             },
             position_marker:{
-                on: true,
+                on: false,
             }
         }
     },
@@ -51,7 +51,13 @@ const config = {
     default_camera_pos: [0,10,0],
     event_callback: null,
     animation_callback: null,
-    debug:{}
+    debug:{},
+    paths:{
+        skyfield: 'https://sac-py-api-production.up.railway.app/sat/',
+        ctipe_manifest_path: 'https://ctipe-production.up.railway.app/m?manifest',
+        ctipe_assets_path: 'https://ctipe-production.up.railway.app/',
+    },
+    flat_model_visible: false
 }
 
 export default config

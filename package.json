@@ -1,5 +1,5 @@
 {
-  "name": "three-sac-frontend",
+  "name": "three-sac-space",
   "version": "1.0.0",
   "description": "three.js-frontend for three-sac",
   "source": "./dev/src/index.html",
@@ -14,9 +14,10 @@
     "frontend"
   ],
   "author": "sac",
-  "git": "https://github.com/luminome/three-sac-frontend",
+  "git": "https://github.com/luminome/three-sac-space",
   "license": "ISC",
   "dependencies": {
+    "geodesic-model": "github:luminome/geodesic-model",
     "stats.js": "^0.17.0",
     "three": "^0.150.1",
     "three-sac": "github:luminome/three-sac"
