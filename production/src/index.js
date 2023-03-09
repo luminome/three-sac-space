@@ -2,7 +2,11 @@ import * as THREE from 'three';
 import {loader, scene, elements, util} from 'three-sac';
 import {labels, trace} from 'three-sac/ui-labels';
 import wedge from 'geodesic-model';
-import geo_data from "./custom.geo-med.json"; //https://geojson-maps.ash.ms/
+import geo_countries from "./custom.geo-med.json"; //https://geojson-maps.ash.ms/
+//import geo_seams from "./blocks_seams_10m.json"; //https://geojson-maps.ash.ms/
+import geo_marine from "./marine_polys_50m.json"; //https://geojson-maps.ash.ms/
+
+
 import config from './config.js';
 import package_detail from '../../package.json';
 
@@ -34,14 +38,201 @@ function polar_to_lon_lat(vct, r){
     return {lon:theta, lat:phi};
 }
 
+const geo_layers = {}
+
+
+function geo_layer(){
+
+    function slate(){
+        const zone_lon = Math.ceil(360/G._s);
+        const zone_lat = Math.ceil(180/G._s);
+        for(let x = 0; x < zone_lon; x++) {
+            G.data_cross.push([]);
+            for(let y = 0; y < zone_lat; y++) {
+                G.data_cross[x].push([]);
+            }
+        }
+    }
+
+    function init(properties) {
+        Object.entries(properties).map(p =>{
+            G[p[0]] = p[1];
+        })
+
+        const fields = G.custom_fields === null ? G.source.meta : G.custom_fields;
+        G.slate();
+        const dat = G.custom_fields === null ? G.source.data : G.source.features;
+
+        dat.map((f,i) => {
+            const feat = {};
+            fields.map(k => {
+                if (f.properties.hasOwnProperty(k)) feat[k] = f.properties[k];
+
+                // if (f.geometry.type === 'Polygon') {
+                //     const cx = f.geometry.coordinates[0].map(c => c[0]);
+                //     const cy = f.geometry.coordinates[0].map(c => c[1]);
+                //     feat.centroid = [util.average(cx), util.average(cy)];
+                // }
+            });
+            f.properties.id = i;
+            G.all_features[i] = feat;
+            //G.all_features[feat['ne_id']] = feat;
+        });
+        return G
+    }
+
+    function render(){
+        const u = new THREE.Vector3();
+        const obj = new THREE.Object3D();
+
+        const get_v = (coord) => {
+            lon_lat_to_polar(u, coord[0], coord[1], G.model.radius);
+            return u.toArray();
+        }
+
+        const filter = (res, value) => {
+             return Math.round(value/(res*2))*res*2;
+        }
+
+
+        function add_to_list(int_lon, int_lat, id){
+            let x = (int_lon + 180)/G._s;
+            if(x >= G.data_cross.length) x = 0;
+            let y = (int_lat + 90)/G._s;
+            if(y >= G.data_cross[0].length) y = 0;
+            if(!G.data_cross[x][y].includes(id)) G.data_cross[x][y].push(id);
+        }
+
+        const coords_to_object = (part, f, id) => {
+            const shape_id = `${f.properties.id}-${id}`;
+            const vertices = [];
+            const cx = part.map(cc => cc[0]);
+            const cy = part.map(cc => cc[1]);
+
+            // check every point in contour
+            part.map(cc => {
+                const pb = [filter(G._s, cc[0]), filter(G._s, cc[1])];
+                add_to_list(pb[0], pb[1], shape_id);
+            });
+            // check point_in+poly for all canon coords.
+            // bounds first
+            const bounds = [
+                filter(G._s, Math.min(...cx)),
+                filter(G._s, Math.min(...cy)),
+                filter(G._s, Math.max(...cx)),
+                filter(G._s, Math.max(...cy))
+            ]
+
+            const centroid = [util.average(cx), util.average(cy)];
+            const sector_raw = {
+                'lon': filter(G._s,centroid[0]),
+                'lat': filter(G._s,centroid[1])
+            }
+
+            add_to_list(sector_raw.lon, sector_raw.lat, shape_id);
+
+            // get limits
+            if(bounds[0] !== bounds[2] && bounds[1] !== bounds[3]){
+                for(let x = bounds[0]; x < bounds[2]; x += G._s) {
+                    for(let y = bounds[1]; y < bounds[3]; y += G._s) {
+                        const point = {x:x, y:y};
+                        if(util.point_in_poly(point, cx, cy)) add_to_list(x, y, shape_id);
+                    }
+                }
+            }
+
+            part.map(c => {
+                vertices.push(...get_v(c));
+            });
+
+            const material = new THREE.LineBasicMaterial({color: G.color});
+            const geometry = new THREE.BufferGeometry();
+            geometry.setAttribute( 'position', new THREE.BufferAttribute( new Float32Array(vertices), 3 ) );
+            const line_obj = {
+                shape: new THREE.Line( geometry, material ),
+                coords_flat: [cx, cy],
+                name: f.properties['ne_id'],
+                centroid: centroid
+            };
+            line_obj.shape.name = shape_id;
+            G.all_shapes[shape_id] = line_obj;
+            obj.add(line_obj.shape);
+        }
+
+        function coords_paired(arr){
+            const cp = [];
+            for(let i=0; i<arr.length; i+=2){
+                cp.push([arr[i],arr[i+1]]);
+            }
+            return cp;
+        }
+
+        const dat = G.custom_fields === null ? G.source.data : G.source.features;
+        dat.map(f => {
+            if (f.geometry.type === 'Polygon' || f.geometry.type === 'LineString') {
+                if(G.custom_fields === null){
+                    coords_to_object(coords_paired(f.geometry.coordinates), f, 0);
+                }else{
+                    coords_to_object(f.geometry.coordinates[0], f, 0);
+                }
+            }
+            if (f.geometry.type === 'MultiPolygon' || f.geometry.type === 'MultiLineString') {
+                f.geometry.coordinates.map((c, i) =>{
+                    if(G.custom_fields === null){
+                        coords_to_object(coords_paired(c), f, i);
+                    }else{
+                        coords_to_object(c[0], f, i);
+                    }
+                })
+            }
+        })
+
+        if(G.add_to_model) G.model.object.add(obj);
+        return G
+    }
+
+
+    const G = {
+        name: null,
+        source: null,
+        color: null,
+        data_cross: [],
+        all_features: {},
+        all_shapes: {},
+        custom_fields: null,
+        model: null,
+        add_to_model: false,
+        _s: null,
+        init,
+        slate,
+        render
+    }
+
+    return G
+
+}
 
 const geo = {
-    all_features: [],
-    all_shapes: [],
-    geo_feat_stats: ['formal_en', 'region_wb', 'subregion','pop_est', 'pop_rank', 'ne_id'],
+    data_cross: [],
+    all_features: {},
+    all_shapes: {},
+    geo_feat_stats: ['name', 'formal_en', 'region_wb', 'subregion','pop_est', 'pop_rank', 'ne_id'],
+
+    geo_slate(){
+        const zone_lon = Math.ceil(360/SPH.sector_scale);
+        const zone_lat = Math.ceil(180/SPH.sector_scale);
+        for(let x = 0; x < zone_lon; x++) {
+            geo.data_cross.push([]);
+            for(let y = 0; y < zone_lat; y++) {
+                geo.data_cross[x].push([]);
+            }
+        }
+        console.log(zone_lon, zone_lat);
+    },
+
     prepare_geodata() {
-        console.log(geo_data);
-        geo_data.features.map(f => {
+        geo.geo_slate();
+        geo_countries.features.map(f => {
             const feat = {};
             geo.geo_feat_stats.map(k => {
                 if (f.properties.hasOwnProperty(k)) feat[k] = f.properties[k];
@@ -51,10 +242,10 @@ const geo = {
                     feat.centroid = [util.average(cx), util.average(cy)];
                 }
             });
-            geo.all_features.push(feat);
-            //console.log(feat);
+            geo.all_features[feat['ne_id']] = feat;
         })
     },
+
     render(model){
         const u = new THREE.Vector3();
         const obj = new THREE.Object3D();
@@ -64,11 +255,56 @@ const geo = {
             return u.toArray();
         }
 
+        const filter = (res, value) => {
+             return Math.round(value/(res*2))*res*2;
+        }
+
+
+        function add_to_list(int_lon, int_lat, id){
+            let x = (int_lon + 180)/SPH.sector_scale;
+            if(x >= geo.data_cross.length) x = 0;
+            let y = (int_lat + 90)/SPH.sector_scale;
+            if(y >= geo.data_cross[0].length) y = 0;
+            if(!geo.data_cross[x][y].includes(id)) geo.data_cross[x][y].push(id);
+        }
+
         const coords_to_object = (part, f, id) => {
+            const shape_id = `${f.properties['ne_id']}-${id}`;
             const vertices = [];
             const cx = part.map(cc => cc[0]);
             const cy = part.map(cc => cc[1]);
+
+            // check every point in contour
+            const ctl = part.map(cc => {
+                const pb = [filter(SPH.sector_scale, cc[0]), filter(SPH.sector_scale, cc[1])];
+                add_to_list(pb[0], pb[1], shape_id);
+            });
+            // check point_in+poly for all canon coords.
+            // bounds first
+            const bounds = [
+                filter(SPH.sector_scale, Math.min(...cx)),
+                filter(SPH.sector_scale, Math.min(...cy)),
+                filter(SPH.sector_scale, Math.max(...cx)),
+                filter(SPH.sector_scale, Math.max(...cy))
+            ]
+
             const centroid = [util.average(cx), util.average(cy)];
+            const sector_raw = {
+                'lon': filter(SPH.sector_scale,centroid[0]),
+                'lat': filter(SPH.sector_scale,centroid[1])
+            }
+
+            add_to_list(sector_raw.lon, sector_raw.lat, shape_id);
+
+            // get limits
+            if(bounds[0] !== bounds[2] && bounds[1] !== bounds[3]){
+                for(let x = bounds[0]; x < bounds[2]; x += SPH.sector_scale) {
+                    for(let y = bounds[1]; y < bounds[3]; y += SPH.sector_scale) {
+                        const point = {x:x, y:y};
+                        if(util.point_in_poly(point, cx, cy)) add_to_list(x, y, shape_id);
+                    }
+                }
+            }
 
             part.map(c => {
                 vertices.push(...get_v(c));
@@ -79,15 +315,18 @@ const geo = {
             geometry.setAttribute( 'position', new THREE.BufferAttribute( new Float32Array(vertices), 3 ) );
             const line_obj = {
                 shape: new THREE.Line( geometry, material ),
+                coords_flat: [cx, cy],
                 name: f.properties['ne_id'],
                 centroid: centroid
             };
-            line_obj.shape.name = `${f.properties['ne_id']}-${id}`;
-            geo.all_shapes.push(line_obj);
+            line_obj.shape.name = shape_id;
+            geo.all_shapes[shape_id] = line_obj;
             obj.add(line_obj.shape);
         }
 
-        geo_data.features.map(f => {
+
+
+        geo_countries.features.map(f => {
             if (f.geometry.type === 'Polygon') {
                 coords_to_object(f.geometry.coordinates[0], f, 0);
             }
@@ -97,6 +336,8 @@ const geo = {
                 })
             }
         })
+
+        //console.log(geo.data_cross);
 
         //obj.rotateY(Math.PI);
         model.object.add(obj);
@@ -142,8 +383,15 @@ config.model.add(wedge.get_object());
 
 //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 const util_vector = new THREE.Vector3();
-const vu = new THREE.Vector3();
-
+const v = {
+    a: new THREE.Vector3(0, 0, 0),
+    b: new THREE.Vector3(0, 0, 0),
+    c: new THREE.Vector3(0, 0, 0),
+    d: new THREE.Vector3(0, 0, 0),
+    e: new THREE.Vector3(0, 0, 0),
+    up: new THREE.Vector3(0,1.0,0),
+    right: new THREE.Vector3(1.0,0,0),
+};
 
 
 const pos = new THREE.Vector3(0,0.0,0);
@@ -333,11 +581,8 @@ config.event_callback = (type, packet) => {
     }
 
     if(type === 'screen'){
-        //        console.log(packet);
-
         scene.controls.ray_caster.setFromCamera(scene.controls.v.user.mouse.raw, scene.controls.cam.camera);
         const intersects = scene.controls.ray_caster.intersectObjects(config.model.children, true);
-        let analog = 'none';
         if(intersects.length > 0) {
             let found = null;
             for(let i=0; i<intersects.length; i++){
@@ -347,47 +592,40 @@ config.event_callback = (type, packet) => {
                 }
             }
             if(found!==null) {
-                //console.log(found);
-                if(labels.groups.user_pos_sphere){ ///} && scene.controls.v.user.mouse.state === 'click'){
+                if(labels.groups.user_pos_sphere){
                     util_vector.copy(found[1].point).sub(config.model.position);
-                    //SPH.object.localToWorld(util_vector);
                     labels.groups.user_pos_sphere.object.position.copy(util_vector);
                     labels.groups.user_pos_sphere.format.dynamic.anchor.copy(config.model.position);
-                    //labels.groups.user_pos_sphere.format.dynamic.anchor.add(util_vector.multiplyScalar(0.95));//config.model.position);
 
                     util_vector.copy(found[1].point).sub(config.model.position);
                     const polar = polar_to_lon_lat(util_vector, SPH.radius);
-                    // //
-                    // // util_vector.add(config.model.position);
-                    // // ERT.object.worldToLocal(util_vector);
-                    // const phi = util.rad_to_deg(Math.acos(util_vector.y/5))-90.0;
-                    // const theta = util.rad_to_deg(Math.atan2(util_vector.x, util_vector.z));
 
                     const scape = scene.controls.cam.camera.position.distanceTo(util_vector.add(config.model.position));
                     const ost = scape/(scene.controls.cam.distance+5);
 
                     labels.groups.user_pos_sphere.object.scale.setScalar(ost);
+                    //D ${(scape/scene.controls.cam.distance).toFixed(2)}u
                     labels.groups.user_pos_sphere.format.text_array = [
                         {
-                            text: `D ${(scape/scene.controls.cam.distance).toFixed(2)}u`,
-                            size: 0.1
+                            text: `—`,
+                            size: 0.05
                         },
                         {
                             text: `LAT ${polar.lat.toFixed(2)}º`,
-                            size: 0.1
+                            size: 0.05
                         },
                         {
                             text: `LON ${polar.lon.toFixed(2)}º`,
-                            size: 0.1
+                            size: 0.05
                         },
                         {
-                        text:`${found[1].point.x.toFixed(2)}x ${found[1].point.y.toFixed(2)}y ${found[1].point.z.toFixed(2)}z`,
-                        size:0.05
+                            text:`${found[1].point.x.toFixed(2)}x ${found[1].point.y.toFixed(2)}y ${found[1].point.z.toFixed(2)}z`,
+                            size:0.025
                         }
                     ];
                     labels.groups.user_pos_sphere.update();
 
-
+                    SPH.lon_lat_to_sector(polar.lon, polar.lat);
                 }
 
                 // analog = `prog_bar intersection(${found[0]}) index:${found[1].instanceId}`;
@@ -468,6 +706,85 @@ const flat_earth = () => {
 
 const globe_earth = () => {
 
+    function lon_lat_to_sector(lon, lat){
+        const lo = Math.round(lon/(R.sector_scale*2))*R.sector_scale*2;
+        const la = Math.round(lat/(R.sector_scale*2))*R.sector_scale*2;
+        const point = {x:lon, y:lat};
+
+        const g_c = geo_layers['countries'];
+
+        let x = (lo + 180)/R.sector_scale;
+        if(x >= g_c.data_cross.length) x = 0;
+        let y = (la + 90)/R.sector_scale;
+        if(y >= g_c.data_cross[0].length) y = 0;
+
+
+        function get_valid(layer){
+            const result = [];
+            layer.data_cross[x][y].map(e =>{
+                if(util.point_in_poly(point, layer.all_shapes[e].coords_flat[0], layer.all_shapes[e].coords_flat[1])){
+                    const ref = e.split('-')[0];
+                    if(!result.includes(ref)) result.push(ref);
+                }
+            })
+            return result.length ? result : 'Undefined';
+        }
+
+
+        const validate = {
+            'countries': get_valid(g_c),
+            'marine': null,
+            'final': 'Undefined'
+        }
+
+        if(validate.countries !== 'Undefined'){
+            const term = g_c.all_features[validate.countries[0]].name;
+            validate.final = `${term}`;
+        }else{
+            const g_M = geo_layers['marine'];
+            validate.marine = get_valid(g_M);
+            if(validate.marine !== 'Undefined') {
+                const k_indx = validate.marine.length-1;
+                const term = g_M.all_features[validate.marine[k_indx]].label;
+                validate.final = `${term}`;
+            }
+        }
+
+        //console.log(result.map(c => geo.all_features[c].name));
+        // let name = result.length ? g_c.all_features[result[0]].name : 'Undefined';
+        //
+        // if(name === 'Undefined'){
+        //     const g_M = geo_layers['marine'];
+        //
+        //     const result = [];
+        //     g_M.data_cross[x][y].map(e =>{
+        //         if(util.point_in_poly(point, g_M.all_shapes[e].coords_flat[0], g_M.all_shapes[e].coords_flat[1])){
+        //             const ref = e.split('-')[0];
+        //             if(!result.includes(ref)) result.push(ref);
+        //         }
+        //     })
+        //
+        //     name = result.length ? g_M.all_features[result[0]].name : 'Marine Undefined';
+        //
+        // }
+        if(validate.final !== 'Undefined'){
+            labels.groups.user_pos_sphere.format.text_array[0] = {
+                text: `${validate.final}`,
+                size: 0.075
+            }
+
+            labels.groups.user_pos_sphere.update();
+        }
+
+
+
+        lon_lat_to_polar(v.a, lo, la, R.radius);
+        R.sector.up.copy(v.up);
+        R.sector.lookAt(config.model.position);
+        R.sector.position.copy(v.a);
+
+    }
+
     function init(name){
         R.name = name;
         const mat = new THREE.MeshStandardMaterial({
@@ -485,16 +802,32 @@ const globe_earth = () => {
         R.sphere = new THREE.Mesh(geom, mat);
         R.sphere.name = 'sphere';
         R.sphere.renderOrder = 1;
-        //
-        //
-        // F.plane.rotateX(Math.PI/-2);
-        // F.plane.position.set(0,-1,0);
-        // F.marker.scale.setScalar(10.0);
+
+
+        //sector
+        const a = util.deg_to_rad(R.sector_scale);
+        v.a.set(0,0,5).applyAxisAngle(v.up, a);
+        v.b.set(0,0,5).applyAxisAngle(v.right, a);
+        v.c.set(0,0,5);
+        const w = (v.a.distanceTo(v.c))*2.0;
+        const h = (v.b.distanceTo(v.c))*2.0;
+
+        const sector_geom = new THREE.PlaneGeometry(w,h);
+        const sector_mat = new THREE.MeshStandardMaterial({
+            color:0x00FF00,
+            transparent:true,
+            opacity:0.75,
+            side: THREE.DoubleSide
+        });
+        R.sector = new THREE.Mesh(sector_geom, sector_mat);
+        R.sector.position.setZ(-R.radius);
+        R.sector.visible = false;
 
         R.object.add(R.sphere);
         R.object.add(R.marker);
-        R.marker.scale.setScalar(0.25);
+        R.object.add(R.sector);
 
+        R.marker.scale.setScalar(0.25);
 
         R.object.rotateY(Math.PI);
         return R
@@ -503,9 +836,12 @@ const globe_earth = () => {
     const R = {
         radius: 5.0,
         marker: elements.position_marker(),
+        sector: null,
+        sector_scale: 2.0,
         sphere: null,
         object: new THREE.Object3D(),
         name: null,
+        lon_lat_to_sector,
         init
     }
 
@@ -528,11 +864,30 @@ config.model.add(ERT.object);
 const SPH = globe_earth().init('SPH');
 config.model.add(SPH.object);
 
-geo.prepare_geodata();
-geo.render(SPH);
 
 
+const marine = {
+    name: 'marine',
+    color: 0x00FFFF,
+    source: geo_marine,
+    _s: SPH.sector_scale,
+    add_to_model: false,
+    model: SPH
+}
 
+const countries = {
+    name: 'countries',
+    color: 0xBBBBBB,
+    source: geo_countries,
+    _s: SPH.sector_scale,
+    custom_fields: ['name', 'formal_en', 'region_wb', 'subregion','pop_est', 'pop_rank', 'ne_id'],
+    add_to_model: true,
+    model: SPH
+}
+
+// geo_layers.seams = geo_layer('seams', 0xFF0000, geo_seams, SPH.sector_scale).init().render(SPH);
+geo_layers.marine = geo_layer().init(marine).render(SPH, false);
+geo_layers.countries = geo_layer().init(countries).render(SPH, true);
 
 
 function world_to_model(vct){
